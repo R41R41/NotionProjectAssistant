@@ -9,6 +9,7 @@ const notionClient = new NotionClient();
 const completionGenerator = await CompletionGenerator.initialize();
 
 app.post("/webhook", async (req, res) => {
+  const startTime = performance.now();
   try {
     const data = req.body.data;
     console.log(`data: ${JSON.stringify(data, null, 2)}`);
@@ -25,22 +26,24 @@ app.post("/webhook", async (req, res) => {
 
     // Notionページのブロックを取得
     const blocks = await notionClient.getPageBlocks(pageId);
-
     console.log(JSON.stringify(blocks, null, 2));
 
     if (blocks.length === 0) {
+      const generateStartTime = performance.now();
       // 新規ページの場合、AI補完を生成
       const response = await completionGenerator.generateCreate(
         pageTitle,
         categories,
         status
       );
+      const generateEndTime = performance.now();
+      console.log(`AI生成時間: ${(generateEndTime - generateStartTime).toFixed(2)}ms`);
 
       console.log(JSON.stringify(response, null, 2));
       // 補完内容をNotionに追加
       await notionClient.createInitialBlocks(pageId, response);
-
     } else {
+      const generateStartTime = performance.now();
       // AI補完を生成
       const completions = await completionGenerator.generateCompletions(
         blocks,
@@ -48,14 +51,21 @@ app.post("/webhook", async (req, res) => {
         categories,
         status
       );
+      const generateEndTime = performance.now();
+      console.log(`AI生成時間: ${(generateEndTime - generateStartTime).toFixed(2)}ms`);
+
       console.log(JSON.stringify(completions, null, 2));
       // 補完内容をNotionに追加
       await notionClient.insertCompletion(completions, pageId);
     }
+    const endTime = performance.now();
+    console.log(`総実行時間: ${(endTime - startTime).toFixed(2)}ms`);
     res.status(200).json({ success: true });
 
   } catch (error) {
+    const endTime = performance.now();
     console.error(error);
+    console.log(`エラーまでの実行時間: ${(endTime - startTime).toFixed(2)}ms`);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
