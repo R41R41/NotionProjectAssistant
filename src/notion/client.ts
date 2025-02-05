@@ -16,6 +16,10 @@ export class NotionClient {
   }
 
   async getPageBlocks(pageId: string): Promise<BlockContent[]> {
+    if (!pageId) {
+      throw new Error("pageId must not be undefined or empty");
+    }
+
     const blocks = await this.client.blocks.children.list({
       block_id: pageId,
     });
@@ -30,10 +34,14 @@ export class NotionClient {
     });
   }
 
-  async insertCompletion(completions: CompletionResult[]): Promise<void> {
+  async insertCompletion(completions: CompletionResult[], pageId: string): Promise<void> {
+    if (!pageId) {
+      throw new Error("pageId must not be undefined or empty");
+    }
+
     for (const completion of completions) {
       await this.client.blocks.children.append({
-        block_id: completion.blockId,
+        block_id: pageId,
         children: [
           {
             object: "block",
@@ -52,5 +60,31 @@ export class NotionClient {
         ],
       });
     }
+  }
+
+  async createInitialBlocks(pageId: string, response: string): Promise<void> {
+    if (!pageId) {
+      throw new Error("pageId must not be undefined or empty");
+    }
+
+    const blocks = [{
+      object: "block" as const,
+      type: "paragraph" as const,
+      paragraph: {
+        rich_text: [
+          {
+            type: "text" as const,
+            text: {
+              content: response,
+            },
+          },
+        ],
+      },
+    }];
+
+    await this.client.blocks.children.append({
+      block_id: pageId,
+      children: blocks,
+    });
   }
 }

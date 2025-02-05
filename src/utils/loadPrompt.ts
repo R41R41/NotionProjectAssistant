@@ -2,10 +2,11 @@ import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
-type Prompts = "completion";
+export type Prompts = "create" | "completion";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
 
 export const loadPrompt = async (promptType: Prompts): Promise<string> => {
   try {
