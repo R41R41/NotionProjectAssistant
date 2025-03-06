@@ -15,6 +15,6 @@ export interface NotionComment {
   content: string;
 }
 
-export type CompletionStatus = "変更検知" | "ページ取得中" | "AI生成中" | "ページ更新中" | "完了" | "エラー";
+export type CompletionStatus = "補完開始" | "ページ取得中" | "関連情報取得中" | "AI生成中" | "ページ更新中" | "完了" | "エラー";
 
 

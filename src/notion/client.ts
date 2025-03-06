@@ -1,5 +1,6 @@
 import { Client } from "@notionhq/client";
 import { BlockContent, CompletionResult, NotionComment, CompletionStatus } from "./types.js";
+import { NotionPage } from "../langchain/vectorStore.js";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -173,7 +174,6 @@ export class NotionClient {
     }
   }
 
-  // マークダウン形式のテキストをNotionのブロックデータに変換するヘルパーメソッド
   private parseMarkdownToNotionBlock(text: string): any {
     // チェックボックス
     if (text.match(/^- \[([ x])\] /)) {
@@ -347,17 +347,12 @@ export class NotionClient {
 
     try {
       for (const completion of completions) {
-        try {
-          if (completion.type === "add") {
-            await this.addBlock(completion.blockId, completion.text);
-          } else if (completion.type === "update") {
-            await this.addComment(completion.blockId, completion.text);
-          } else if (completion.type === "delete") {
-            await this.addComment(completion.blockId, completion.text);
-          }
-        } catch (error) {
-          console.error(`操作エラー: ${error}`);
-          // 個別の操作エラーは記録するが処理は続行
+        if (completion.type === "add") {
+          await this.addBlock(completion.blockId, completion.text);
+        } else if (completion.type === "update") {
+          await this.addComment(completion.blockId, completion.text);
+        } else if (completion.type === "delete") {
+          await this.addComment(completion.blockId, completion.text);
         }
       }
       await this.updateCompletionStatus(pageId, "完了");
@@ -378,17 +373,12 @@ export class NotionClient {
 
     try {
       for (const completion of completions) {
-        try {
-          if (completion.type === "add") {
-            await this.addBlock(completion.blockId, completion.text);
-          } else if (completion.type === "update") {
-            await this.updateBlock(completion.blockId, completion.text);
-          } else if (completion.type === "delete") {
-            await this.deleteBlock(completion.blockId);
-          }
-        } catch (error) {
-          console.error(`操作エラー: ${error}`);
-          // 個別の操作エラーは記録するが処理は続行
+        if (completion.type === "add") {
+          await this.addBlock(completion.blockId, completion.text);
+        } else if (completion.type === "update") {
+          await this.updateBlock(completion.blockId, completion.text);
+        } else if (completion.type === "delete") {
+          await this.deleteBlock(completion.blockId);
         }
       }
       await this.updateCompletionStatus(pageId, "完了");
@@ -397,5 +387,84 @@ export class NotionClient {
       await this.updateCompletionStatus(pageId, "エラー");
       throw error;
     }
+  }
+
+  async getAllPages(): Promise<{ backlog: any[], documents: any[] }> {
+    try {
+      // バックログDBのIDを環境変数から取得
+      const BACKLOG_DB_ID = process.env.NOTION_BACKLOG_DB_ID;
+      const DOCUMENT_DB_ID = process.env.NOTION_DOCUMENT_DB_ID;
+
+      if (!BACKLOG_DB_ID || !DOCUMENT_DB_ID) {
+        throw new Error("NOTION_BACKLOG_DB_ID or NOTION_DOCUMENT_DB_ID is not set");
+      }
+
+      // バックログDBからすべてのページを取得
+      const backlogPages = await this.getAllPagesFromDatabase(BACKLOG_DB_ID);
+
+      // 資料DBからすべてのページを取得
+      const documentPages = await this.getAllPagesFromDatabase(DOCUMENT_DB_ID);
+
+      return {
+        backlog: backlogPages,
+        documents: documentPages
+      };
+    } catch (error) {
+      console.error(`Notionページ取得エラー: ${error}`);
+      return { backlog: [], documents: [] };
+    }
+  }
+
+  private async getAllPagesFromDatabase(databaseId: string): Promise<any[]> {
+    const pages = [];
+    let cursor: string | undefined = undefined;
+
+    while (true) {
+      const response = await this.client.databases.query({
+        database_id: databaseId,
+        start_cursor: cursor || undefined,
+      });
+
+      pages.push(...response.results);
+
+      if (!response.has_more) break;
+      cursor = response.next_cursor?.toString() || undefined;
+    }
+
+    return pages;
+  }
+
+  async getPageContent(pageId: string): Promise<string> {
+    const blocks = await this.getPageBlocks(pageId);
+    return blocks.map(block => block.content).join("\n");
+  }
+
+  async convertToNotionPages(pages: any[], databaseType: "backlog" | "document"): Promise<NotionPage[]> {
+    const result: NotionPage[] = [];
+
+    for (const page of pages) {
+      try {
+        // タイトルプロパティの名前はDBによって異なる可能性があるため調整が必要
+        const titleProp = databaseType === "backlog" ? "タスク名" : "名前";
+        const title = page.properties[titleProp]?.title?.[0]?.text?.content || "無題";
+
+        // ページの内容を取得
+        const content = await this.getPageContent(page.id);
+
+        result.push({
+          id: page.id,
+          title,
+          content,
+          database: databaseType,
+          categories: page.categories,
+          status: page.status
+        });
+      } catch (error) {
+        console.error(`ページ変換エラー: ${error}`);
+        // エラーが発生しても処理を続行
+      }
+    }
+
+    return result;
   }
 }

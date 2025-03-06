@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { BlockContent, CompletionResult, NotionComment } from "../notion/types.js";
 import { loadPrompt, Prompts } from "../utils/loadPrompt.js";
 import { z } from "zod";
+import { VectorStoreManager } from "./vectorStore.js";
 dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY) {
@@ -24,7 +25,7 @@ export class CompletionGenerator {
   }
 
   public static async initialize(): Promise<CompletionGenerator> {
-    const prompts = ["task_completion_with_comments", "task_completion"];
+    const prompts = ["task_completion_with_comments", "task_completion", "document_completion_with_comments", "document_completion"];
     const systemPrompts = new Map<Prompts, string>();
     for (const p of prompts) {
       const prompt = await loadPrompt(p as Prompts);
@@ -37,33 +38,63 @@ export class CompletionGenerator {
     return new CompletionGenerator(systemPrompts);
   }
 
-  async generateTaskCompletionsWithComments(
+  async getRelatedDocuments(pageTitle: string, categories: string[], blocks: BlockContent[]): Promise<string> {
+    const blocksContent = blocks
+      .map((b) => `${b.blockId}: ${b.content}`)
+      .join("\n");
+    // RAGを使用して関連ドキュメントを検索
+    const vectorStore = VectorStoreManager.getInstance();
+    const query = `${pageTitle} ${categories.join(" ")} ${blocksContent.substring(0, 500)}`;
+    const relevantDocs = await vectorStore.searchRelevantDocuments(query, 3);
+
+    // 関連ドキュメントの内容を整形
+    const contextContent = relevantDocs.map(doc => {
+      return `
+        タイトル: ${doc.metadata.title}
+        データベース: ${doc.metadata.database === "backlog" ? "バックログ" : "資料"}
+        URL: ${doc.metadata.url}
+        内容:
+        ${doc.pageContent.substring(0, 500)}...
+        `;
+    }).join("\n\n");
+    return contextContent;
+  }
+
+  async generateCompletions(
     blocks: BlockContent[],
     comments: NotionComment[],
     pageTitle: string,
     categories: string[],
     status: string,
-    level: string,
-    subTasks: string[]
+    contextContent: string,
+    isDocument: boolean,
   ): Promise<CompletionResult[]> {
     try {
+      const isComments = comments.length > 0;
+      const promptType = isDocument ? "document_completion" : "task_completion";
+      const promptTypeWithComments = isDocument ? "document_completion_with_comments" : "task_completion_with_comments";
+      const systemContent = this.systemPrompts.get(isComments ? promptTypeWithComments : promptType);
+      if (!systemContent) {
+        throw new Error("Failed to get task full completion prompt");
+      }
+
+      const now = this.getTokyoDate();
+
       const blocksContent = blocks
         .map((b) => `${b.blockId}: ${b.content}`)
         .join("\n");
 
-      const systemContent = this.systemPrompts.get("task_completion_with_comments");
-      if (!systemContent) {
-        throw new Error("Failed to get task full completion prompt");
-      }
       const humanContents = [
-        `タスク名: ${pageTitle}`,
+        `現在の日時: ${now}`,
+        isDocument ? `ドキュメント名: ${pageTitle}` : `タスク名: ${pageTitle}`,
         `ステータス: ${status}`,
         `カテゴリ: ${categories.join(", ")}`,
         `ページ内容: ${blocksContent}`,
-        `コメント: ${comments.map((c) => `${c.commentId}: ${c.content}`).join("\n")}`,
+        isComments ? `コメント: ${comments.map((c) => `${c.commentId}: ${c.content}`).join("\n")}` : "",
+        `関連情報: ${contextContent}`,
       ];
 
-      const completions = await this.generateCompletions(
+      const completions = await this.getLLMResponse(
         humanContents,
         systemContent
       );
@@ -74,43 +105,25 @@ export class CompletionGenerator {
     }
   }
 
-  async generateTaskCompletions(
-    blocks: BlockContent[],
-    pageTitle: string,
-    categories: string[],
-    status: string,
-    level: string,
-    subTasks: string[]
-  ): Promise<CompletionResult[]> {
-    try {
-      const systemContent = this.systemPrompts.get("task_completion");
-      if (!systemContent) {
-        throw new Error("Failed to get task full completion prompt");
-      }
+  private getTokyoDate(): string {
+    const options: Intl.DateTimeFormatOptions = {
+      timeZone: 'Asia/Tokyo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    };
 
-      const blocksContent = blocks
-        .map((b) => `${b.blockId}: ${b.content}`)
-        .join("\n");
+    const formatter = new Intl.DateTimeFormat('ja-JP', options);
+    const parts = formatter.formatToParts(new Date());
 
-      const humanContents = [
-        `タスク名: ${pageTitle}`,
-        `ステータス: ${status}`,
-        `カテゴリ: ${categories.join(", ")}`,
-        `ページ内容: ${blocksContent}`,
-      ];
+    const year = parts.find(part => part.type === 'year')?.value || '';
+    const month = parts.find(part => part.type === 'month')?.value || '';
+    const day = parts.find(part => part.type === 'day')?.value || '';
 
-      const completions = await this.generateCompletions(
-        humanContents,
-        systemContent
-      );
-      return completions;
-    } catch (error) {
-      console.error("JSONパースエラー:", error);
-      throw error;
-    }
+    return `${year}/${month}/${day}`;
   }
 
-  async generateCompletions(
+  async getLLMResponse(
     humanContents: string[],
     systemContent: string
   ): Promise<CompletionResult[]> {

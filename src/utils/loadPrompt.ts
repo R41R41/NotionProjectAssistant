@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
-export type Prompts = "task_completion_with_comments" | "task_completion";
+export type Prompts = "task_completion_with_comments" | "task_completion" | "document_completion_with_comments" | "document_completion";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
