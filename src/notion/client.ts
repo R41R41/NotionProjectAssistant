@@ -1,5 +1,5 @@
 import { Client } from "@notionhq/client";
-import { BlockContent, CompletionResult, NotionComment, CompletionStatus } from "./types.js";
+import { BlockContent, CompletionResult, NotionComment, CompletionStatus, PropertyValue } from "./types.js";
 import { NotionPage } from "../langchain/vectorStore.js";
 import dotenv from "dotenv";
 
@@ -466,5 +466,76 @@ export class NotionClient {
     }
 
     return result;
+  }
+
+  async updatePageProperties(pageId: string, properties: PropertyValue[]): Promise<void> {
+    if (!pageId) {
+      throw new Error("pageId must not be undefined or empty");
+    }
+
+    try {
+      const notionProperties: Record<string, any> = {};
+
+      for (const prop of properties) {
+        switch (prop.type) {
+          case "タイトル":
+            notionProperties[prop.type] = {
+              title: [
+                {
+                  text: {
+                    content: prop.value
+                  }
+                }
+              ]
+            };
+            break;
+          case "カテゴリ":
+            notionProperties[prop.type] = {
+              multi_select: prop.value.map(value => ({ name: value }))
+            };
+            break;
+          case "優先度":
+            notionProperties[prop.type] = {
+              select: {
+                name: prop.value
+              }
+            };
+            break;
+          case "工数レベル":
+            notionProperties[prop.type] = {
+              select: {
+                name: prop.value
+              }
+            };
+            break;
+          case "次のタスクにより保留中：":
+            notionProperties[prop.type] = {
+              relation: Array.isArray(prop.value)
+                ? prop.value.map(id => ({ id }))
+                : [{ id: prop.value }]
+            };
+            break;
+          case "次のタスクを保留中：":
+            notionProperties[prop.type] = {
+              relation: Array.isArray(prop.value)
+                ? prop.value.map(id => ({ id }))
+                : [{ id: prop.value }]
+            };
+            break;
+        }
+      }
+
+      await this.client.pages.update({
+        page_id: pageId,
+        properties: notionProperties
+      });
+
+      this.updateCompletionStatus(pageId, "完了");
+      console.log(`\x1b[35mプロパティ更新完了: ${pageId}\x1b[0m`);
+    } catch (error) {
+      console.error(`プロパティ更新エラー: ${error}`);
+      this.updateCompletionStatus(pageId, "エラー");
+      throw error;
+    }
   }
 }

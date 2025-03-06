@@ -2,6 +2,7 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import dotenv from "dotenv";
 import { BlockContent, CompletionResult, NotionComment } from "../notion/types.js";
+import { PropertyValue, TitleProperty, CategoryProperty, PendingByTaskProperty, PendingTaskProperty, PriorityProperty, WorkloadProperty } from "../notion/types.js";
 import { loadPrompt, Prompts } from "../utils/loadPrompt.js";
 import { z } from "zod";
 import { VectorStoreManager } from "./vectorStore.js";
@@ -25,7 +26,7 @@ export class CompletionGenerator {
   }
 
   public static async initialize(): Promise<CompletionGenerator> {
-    const prompts = ["task_completion_with_comments", "task_completion", "document_completion_with_comments", "document_completion"];
+    const prompts = ["task_completion_with_comments", "task_completion", "document_completion_with_comments", "document_completion", "update_properties"];
     const systemPrompts = new Map<Prompts, string>();
     for (const p of prompts) {
       const prompt = await loadPrompt(p as Prompts);
@@ -94,7 +95,7 @@ export class CompletionGenerator {
         `関連情報: ${contextContent}`,
       ];
 
-      const completions = await this.getLLMResponse(
+      const completions = await this.getLLMCompletionResponse(
         humanContents,
         systemContent
       );
@@ -123,7 +124,117 @@ export class CompletionGenerator {
     return `${year}/${month}/${day}`;
   }
 
-  async getLLMResponse(
+  // LLMから返される値を既存のPropertyValue型に変換するヘルパー関数
+  private convertToPropertyValue(properties: any[]): PropertyValue[] {
+    return properties.map(prop => {
+      switch (prop.type) {
+        case "タイトル":
+          return {
+            type: "タイトル",
+            value: prop.value
+          } as TitleProperty;
+
+        case "カテゴリ":
+          return {
+            type: "カテゴリ",
+            value: Array.isArray(prop.value) ? prop.value : [prop.value]
+          } as CategoryProperty;
+
+        case "次のタスクにより保留中：":
+          return {
+            type: "次のタスクにより保留中：",
+            value: prop.value
+          } as PendingByTaskProperty;
+
+        case "次のタスクを保留中：":
+          return {
+            type: "次のタスクを保留中：",
+            value: prop.value
+          } as PendingTaskProperty;
+
+        case "優先度":
+          return {
+            type: "優先度",
+            value: prop.value
+          } as PriorityProperty;
+
+        case "工数レベル":
+          return {
+            type: "工数レベル",
+            value: prop.value
+          } as WorkloadProperty;
+
+        default:
+          console.warn(`未知のプロパティタイプ: ${prop.type}`);
+          return null;
+      }
+    }).filter(Boolean) as PropertyValue[];
+  }
+
+  async generatePropertyUpdates(
+    pageTitle: string,
+    categories: string[],
+    status: string,
+    priority: string,
+    workload: string,
+    pendingByTask: string[],
+    pendingTask: string[],
+    blocks: BlockContent[],
+    comments: NotionComment[],
+    contextContent: string
+  ): Promise<PropertyValue[]> {
+    try {
+      const promptType = "update_properties";
+      const now = this.getTokyoDate();
+      const blocksContent = blocks
+        .map((b) => `${b.blockId}: ${b.content}`)
+        .join("\n");
+      const systemContent = this.systemPrompts.get(promptType);
+      if (!systemContent) {
+        throw new Error("Failed to get update properties prompt");
+      }
+
+      const humanContents = [
+        `現在の日時: ${now}`,
+        `タスク名: ${pageTitle}`,
+        `カテゴリ: ${categories.join(", ")}`,
+        `ステータス: ${status}`,
+        `優先度: ${priority}`,
+        `工数レベル: ${workload}`,
+        `次のタスクにより保留中: ${pendingByTask.join(", ")}`,
+        `次のタスクを保留中: ${pendingTask.join(", ")}`,
+        `ページ内容: ${blocksContent}`,
+        `関連情報: ${contextContent}`,
+        `コメント: ${comments.map((c) => `${c.commentId}: ${c.content}`).join("\n")}`,
+      ];
+
+      const PropertyUpdateSchema = z.object({
+        properties: z.array(z.object({
+          type: z.string(),
+          value: z.string(),
+        }))
+      });
+
+      const structuredLLM = this.model.withStructuredOutput(PropertyUpdateSchema, {
+        name: "PropertyUpdate",
+      });
+
+      const messages = [
+        new SystemMessage(systemContent),
+        ...humanContents.map((h) => new HumanMessage(h)),
+      ];
+
+      const response = await structuredLLM.invoke(messages);
+
+      // LLMから返された値を既存のPropertyValue型に変換
+      return this.convertToPropertyValue(response.properties);
+    } catch (error) {
+      console.error("プロパティ更新生成エラー:", error);
+      throw error;
+    }
+  }
+
+  async getLLMCompletionResponse(
     humanContents: string[],
     systemContent: string
   ): Promise<CompletionResult[]> {
@@ -139,7 +250,7 @@ export class CompletionGenerator {
       });
 
       const structuredLLM = this.model.withStructuredOutput(CompletionSchema, {
-        name: "TaskCompletion",
+        name: "Completion",
       });
 
       const messages = [
