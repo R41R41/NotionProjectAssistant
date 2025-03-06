@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { BlockContent, CompletionResult } from "../notion/types.js";
 import { loadPrompt, Prompts } from "../utils/loadPrompt.js";
 import { JsonOutputParser } from "@langchain/core/output_parsers";
+import { z } from "zod";
 dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY) {
@@ -23,9 +24,8 @@ export class CompletionGenerator {
     this.systemPrompts = systemPrompts;
   }
 
-
   public static async initialize(): Promise<CompletionGenerator> {
-    const prompts = ["create", "completion"];
+    const prompts = ["task_full_completion", "task_partial_completion"];
     const systemPrompts = new Map<Prompts, string>();
     for (const p of prompts) {
       const prompt = await loadPrompt(p as Prompts);
@@ -36,69 +36,66 @@ export class CompletionGenerator {
     }
 
     return new CompletionGenerator(systemPrompts);
-
   }
 
-  async generateCreate(
-    pageTitle: string,
-    categories: string[],
-    status: string
-  ): Promise<string> {
-    try {
-      const systemContent = this.systemPrompts.get("create");
-      if (!systemContent) {
-        throw new Error("Failed to get create prompt");
-      }
-
-      const humanContent =
-        `ページのタイトル: ${pageTitle}\nカテゴリ: ${categories.join(", ")}\n状態: ${status}\n`;
-
-      const messages = [
-        new SystemMessage(systemContent),
-        new HumanMessage(humanContent),
-      ];
-
-      const response = await this.model.invoke(messages);
-
-      return response.content.toString();
-    } catch (error) {
-      console.error("JSONパースエラー:", error);
-      throw error;
-    }
-
-  }
-
-
-  async generateCompletions(
+  async generateTaskFullCompletions(
     blocks: BlockContent[],
     pageTitle: string,
     categories: string[],
     status: string
-
   ): Promise<CompletionResult[]> {
     try {
-      const systemContent = this.systemPrompts.get("completion");
+      const systemContent = this.systemPrompts.get("task_full_completion");
       if (!systemContent) {
-        throw new Error("Failed to get completion prompt");
+        throw new Error("Failed to get task full completion prompt");
       }
 
-      const humanContent =
-        `ページのタイトル: ${pageTitle}\nカテゴリ: ${categories.join(", ")}\n状態: ${status}\n` +
-        blocks
-          .map((b) => `${b.blockId}: ${b.content}`)
-          .join("\n");
+      const blocksContent = blocks
+        .map((b) => `${b.blockId}: ${b.content}`)
+        .join("\n");
 
-      const parser = new JsonOutputParser();
-      const chain = this.model.pipe(parser);
+      const humanContents = [
+        `タイトル: ${pageTitle}`,
+        `カテゴリ: ${categories.join(", ")}`,
+        `状態: ${status}`,
+        `ブロック内容: ${blocksContent}`,
+      ];
+
+      const completions = await this.generateCompletions(
+        humanContents,
+        systemContent
+      );
+      return completions;
+    } catch (error) {
+      console.error("JSONパースエラー:", error);
+      throw error;
+    }
+  }
+
+  async generateCompletions(
+    humanContents: string[],
+    systemContent: string
+  ): Promise<CompletionResult[]> {
+    try {
+      const CompletionSchema = z.array(
+        z.object({
+          type: z.enum(["add", "update", "delete"]),
+          blockId: z.string(),
+          text: z.string(),
+        })
+      );
+
+      const structuredLLM = this.model.withStructuredOutput(CompletionSchema, {
+        name: "TaskCompletion",
+      });
 
       const messages = [
         new SystemMessage(systemContent),
-        new HumanMessage(humanContent),
+        ...humanContents.map((h) => new HumanMessage(h)),
       ];
 
-      const response = await chain.invoke(messages);
-
-      return response as CompletionResult[];
+      const response = await structuredLLM.invoke(messages);
+      return response;
     } catch (error) {
       console.error("JSONパースエラー:", error);
       throw error;

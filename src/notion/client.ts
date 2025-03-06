@@ -34,31 +34,49 @@ export class NotionClient {
     });
   }
 
-  async insertCompletion(completions: CompletionResult[], pageId: string): Promise<void> {
+  async createBlock(blockId: string, text: string): Promise<void> {
+    await this.client.blocks.children.append({
+      block_id: blockId,
+      children: [
+        {
+          type: "paragraph",
+          paragraph: { rich_text: [{ text: { content: text } }] },
+        },
+      ],
+    });
+  }
+
+  async updateBlock(blockId: string, text: string): Promise<void> {
+    await this.client.blocks.update({
+      block_id: blockId,
+      paragraph: {
+        rich_text: [{ text: { content: text } }],
+      },
+    });
+  }
+
+  async deleteBlock(blockId: string): Promise<void> {
+    await this.client.blocks.delete({
+      block_id: blockId,
+    });
+  }
+
+  async insertCompletion(
+    completions: CompletionResult[],
+    pageId: string
+  ): Promise<void> {
     if (!pageId) {
       throw new Error("pageId must not be undefined or empty");
     }
 
     for (const completion of completions) {
-      await this.client.blocks.children.append({
-        block_id: pageId,
-        children: [
-          {
-            object: "block",
-            type: "paragraph",
-            paragraph: {
-              rich_text: [
-                {
-                  type: "text",
-                  text: {
-                    content: completion.completionText,
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      });
+      if (completion.type === "add") {
+        await this.createBlock(pageId, completion.text);
+      } else if (completion.type === "update") {
+        await this.updateBlock(completion.blockId, completion.text);
+      } else if (completion.type === "delete") {
+        await this.deleteBlock(completion.blockId);
+      }
     }
   }
 
@@ -67,20 +85,22 @@ export class NotionClient {
       throw new Error("pageId must not be undefined or empty");
     }
 
-    const blocks = [{
-      object: "block" as const,
-      type: "paragraph" as const,
-      paragraph: {
-        rich_text: [
-          {
-            type: "text" as const,
-            text: {
-              content: response,
+    const blocks = [
+      {
+        object: "block" as const,
+        type: "paragraph" as const,
+        paragraph: {
+          rich_text: [
+            {
+              type: "text" as const,
+              text: {
+                content: response,
+              },
             },
-          },
-        ],
+          ],
+        },
       },
-    }];
+    ];
 
     await this.client.blocks.children.append({
       block_id: pageId,

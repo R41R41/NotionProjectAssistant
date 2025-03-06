@@ -4,6 +4,7 @@ export interface BlockContent {
 }
 
 export interface CompletionResult {
+  type: "add" | "update" | "delete";
   blockId: string;
-  completionText: string;
+  text: string;
 }
