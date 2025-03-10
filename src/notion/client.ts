@@ -138,8 +138,7 @@ export class NotionClient {
       console.error(`ブロック追加エラー: ${error}`);
       // 子ブロックをサポートしていない場合はコメントとして追加
       if (error.code === 'validation_error' && error.message.includes('Block does not support children')) {
-        console.log(`ブロックが子要素をサポートしていないため、コメントとして追加します`);
-        await this.addComment(blockId, text);
+        console.log(`ブロックが子要素をサポートしていません`);
       } else {
         throw error;
       }

@@ -265,7 +265,11 @@ class Completion {
       console.log(JSON.stringify(completions, null, 2));
       const insertStartTime = performance.now();
       await this.notionClient.updateCompletionStatus(pageId, "ページ更新中");
-      await this.notionClient.insertCompletion(completions, pageId);
+      if (comments.length > 0) {
+        await this.notionClient.insertCompletionWithComments(completions, pageId);
+      } else {
+        await this.notionClient.insertCompletion(completions, pageId);
+      }
       const insertEndTime = performance.now();
       console.log(`\x1b[35mフィードバック挿入完了\x1b[0m`);
       this.times.push({ name: "insert", value: insertEndTime - insertStartTime });
